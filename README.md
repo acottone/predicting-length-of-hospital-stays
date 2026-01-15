@@ -1,5 +1,19 @@
 # Predicting Hospital Length of Stay
 
+Modeling hospital length of stay using Negative Binomial regression and regularized statistical learning on large-scale clinical data.
+
+[![R](https://img.shields.io/badge/R-4.0%2B-blue)](https://www.r-project.org/)
+[![GLM](https://img.shields.io/badge/Model-Negative%20Binomial-orange)](https://cran.r-project.org/package=MASS)
+[![License](https://img.shields.io/badge/License-Academic-lightgrey)](LICENSE)
+
+---
+
+## TL;DR
+- Modeled hospital length of stay as overdispersed count data
+- Applied Negative Binomial GLMs with Lasso regularization
+- Reduced predictors from 29 to 18 while preserving accuracy
+- Achieved ~1.6-day average prediction error on 100,000 patients
+
 ---
 
 ## Project Overview
@@ -10,17 +24,12 @@ Using the length of stay dataset from Microsoft
 ([Hospital Length of Stay Dataset](https://microsoft.github.io/r-server-hospital-length-of-stay/input_data.html))
 with 100,000 patient records, I applied generalized linear models, regularization, and cross-validation to produce a parsimonious model suitable for clinical and operational decision-making.
 
-### Key Objectives
-- Identify clinical and demographic predictors of hospital LOS
-- Model LOS appropriately as overdispersed count data
-- Reduce model complexity while preserving predictive performance
-- Produce interpretable results suitable for healthcare stakeholders
-
 ---
 
 ## Dataset
 
-- **Source:** [`LengthOfStay.csv`](https://microsoft.github.io/r-server-hospital-length-of-stay/input_data.html)
+**Source:** [Microsoft Hospital Length of Stay Dataset](https://microsoft.github.io/r-server-hospital-length-of-stay/)
+- **File:** `LengthOfStay.csv`
 - **Size:** 100,000 patient records
 - **Variables:** 28 columns including demographics, comorbidities, laboratory results, and vital signs
 - **Response Variable:** `lengthofstay` (discrete count variable, days)
@@ -28,6 +37,15 @@ with 100,000 patient records, I applied generalized linear models, regularizatio
 ---
 
 ## Methodology
+
+### Analysis Pipeline
+
+1. Data cleaning and exploratory analysis
+2. Overdispersion diagnostics and model selection
+3. Negative Binomial GLM fitting
+4. Lasso regularization for variable selection
+5. 10-fold cross-validation for model comparison
+6. Performance evaluation and interpretability analysis
 
 ### Statistical Modeling Approach
 1. Negative Binomial Regression
@@ -118,6 +136,17 @@ predicting-length-of-hospital-stays/
 
 ---
 
+## Technologies Used
+
+- **R 4.0+**: Statistical computing
+- **MASS**: Negative Binomial regression
+- **glmnet**: Lasso regularization
+- **caret**: Cross-validation and model evaluation
+- **ggplot2**: Data visualization
+- **dplyr**: Data manipulation
+
+---
+
 ## Installation & Requirements
 
 ### Required R Packages
@@ -174,8 +203,9 @@ The R Markdown file supports multiple output formats:
 ---
 
 ## Author
-**Angelina Cottone**
-B.S. Statistics (Statistical Data Science), UC Davis
+
+**Angelina Cottone**  
+B.S. Statistics (Statistical Data Science), UC Davis 2025
 
 ---
 
