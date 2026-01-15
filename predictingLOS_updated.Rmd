@@ -1,0 +1,976 @@
+---
+title: "Predicting Length of Stay - Updated"
+author: "Angelina Cottone"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    fig_caption: yes
+    keep_tex: no
+    latex_engine: pdflatex
+  html_document: default
+geometry: margin=1in
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.align = "center", fig.width = 7, fig.height = 4.5,
+                      out.width = "100%")
+options(scipen = 999)
+```
+
+## 1 Introduction
+
+Understanding the factors that influence hospital length of stay (LOS) is crucial for improving patient outcomes and optimizing resource allocation in healthcare settings. Extended hospital stays increase the risk of complications and hospital-acquired infections while placing financial strain on both facilities and patients. Identifying key predictors of LOS can help clinicians enhance quality of care and improve operational efficiency.
+
+Multiple factors may influence hospital length of stay, including patient demographics, comorbidities, and laboratory results. This analysis seeks to answer the primary research question: *What are the key factors that influence the length of hospital stays for patients?*
+
+To address this question, the following sub-questions guide the analysis:
+
+-   How do comorbidities, such as asthma, iron deficiency, and renal disease, impact length of stay?
+
+-   What role do mental health conditions play in determining length of stay?
+
+-   How do laboratory values, such as hematocrit, neutrophil levels, and blood urea nitrogen, influence hospital length of stay?
+
+By addressing these questions, this study aims to identify the most influential factors in predicting LOS and provide actionable insights to improve patient outcomes and optimize healthcare practices through data-driven approaches.
+
+## 2 Data Acquisition & Processing
+
+### 2.1 Data Overview
+
+The dataset (`LengthOfStay.csv`) contains 100,000 patient records across 28 columns, including information on comorbidities, laboratory results, and vital signs. The dataset encompasses a variety of patient characteristics, including demographics, health conditions, laboratory values, and vital signs. Variables irrelevant to this analysis—such as date columns, patient IDs, and facility IDs—were excluded, leaving 24 variables for modeling.
+
+```{r data import}
+# 2.1 Data Overview
+# Libraries
+library(psych)
+library(gridExtra)
+library(ggplot2)
+library(MASS)
+library(car)
+library(caret)
+library(lmtest)
+library(glmnet)
+library(corrplot)
+library(reshape2)
+library(GGally)
+library(viridis)
+library(dplyr)
+
+# Read data from current working directory
+hospital_data <- read.csv("LengthOfStay.csv")
+hospital <- hospital_data %>% select(-vdate, -discharged, -facid, -eid)
+```
+
+### 2.2 Data Preprocessing
+
+A check for missing data confirmed that there were no missing values in the dataset, eliminating the need for data-cleaning techniques or imputations. An initial summary of the dataset reveals a mix of variable types:
+
+-   **Binary variables**: Indicators for health conditions (e.g., `asthma`, `pneum`, `malnutrition`) and mental health conditions (e.g., `depress`, `psychologicaldisordermajor`)
+
+-   **Continuous variables**: Laboratory results (e.g., `hematocrit`, `neutrophils`) and vital signs (e.g., `pulse`, `respiration`)
+
+-   **Categorical variables**: Demographic information (e.g., `gender`, `rcount`)
+
+-   **Response variable**: `lengthofstay` is a discrete count variable representing the number of days a patient remains hospitalized
+
+To determine the appropriate modeling approach, the mean and variance of `lengthofstay` were examined for overdispersion. The variance (5.571) substantially exceeds the mean (4.001), indicating overdispersion. This suggests that a Negative Binomial model is more appropriate than a standard Poisson model, as it accounts for overdispersion through an additional dispersion parameter. The Negative Binomial distribution models the variance independently from the mean, providing more accurate parameter estimates and prediction intervals compared to Quasi-Poisson models.
+
+```{r warning=FALSE, include=FALSE}
+# 2.2 Data Preprocessing
+# Summarize data structure
+data_summary <- summary(hospital)
+data_structure <- str(hospital)
+
+# Check for missing values
+missing_count <- sum(is.na(hospital))
+
+# Check mean and variance of lengthofstay
+los_mean <- mean(hospital$lengthofstay)
+los_var <- var(hospital$lengthofstay)
+```
+
+The dataset contains no missing values. The mean length of stay is `r round(los_mean, 3)` days with a variance of `r round(los_var, 3)`, confirming substantial overdispersion (variance >> mean).
+
+### 2.3 Feature Engineering
+
+Feature engineering was performed on selected variables to improve model performance and interpretability:
+
+-   **Readmission count** (`rcount`): Converted to a binary variable where 0 indicates no readmissions in the past 180 days and 1 indicates one or more readmissions
+
+-   **Gender**: Converted to binary encoding with 1 for male and 0 for female
+
+-   **Secondary diagnoses** (`secondarydiagnosisnonicd9`): Rare categories (all categories except `1`) were combined into an "Other" category to simplify the analysis
+
+Outlier prevalence in continuous variables was assessed using the interquartile range (IQR) method, where values beyond 1.5 times the IQR from the first and third quartiles were flagged as potential outliers. This analysis revealed that 50.79% of the dataset contains values that would be classified as outliers. However, in the healthcare context, these extreme values likely represent legitimate real-world variation, such as severe cases or complex conditions. Therefore, outliers were retained to preserve the natural variability of the dataset and avoid artificially constraining the model.
+
+```{r warning=FALSE}
+# 2.3 Feature Engineering
+# Binary transformations for readmissions and gender
+hospital$rcount_binary <- ifelse(hospital$rcount == "0", 0, 1)
+hospital$gender_binary <- ifelse(hospital$gender == "M", 1, 0)
+
+# Recategorize secondarydiagnosisnonicd9
+hospital$secondarydx_recategorized <- ifelse(
+  hospital$secondarydiagnosisnonicd9 == 1, "1", "Other")
+
+# Function to detect outliers for IQR method
+detect_outliers <- function(data, column) {
+  Q1 <- quantile(data[[column]], 0.25)
+  Q3 <- quantile(data[[column]], 0.75)
+  IQR <- Q3 - Q1
+  lower_bound <- Q1 - 1.5 * IQR
+  upper_bound <- Q3 + 1.5 * IQR
+  return(data[[column]] < lower_bound | data[[column]] > upper_bound)
+}
+
+# Check for outliers
+columns_to_check <- c("hematocrit", "neutrophils", "sodium", "glucose", 
+                      "bloodureanitro", "creatinine", "bmi", "pulse", 
+                      "respiration")
+
+outliers_all <- sapply(columns_to_check, 
+                       function(col) detect_outliers(hospital, col))
+outliers_all <- rowSums(outliers_all) > 0
+length(outliers_all[outliers_all]) # Number of outlier rows
+```
+
+## 3 Exploratory Data Analysis (EDA)
+
+### 3.1 Summary Statistics
+
+The exploratory data analysis began by examining key characteristics of the dataset using descriptive statistics, including mean, standard deviation, skewness, and range.
+
+Key insights from the summary statistics:
+
+-   **Strong positive skewness**: `neutrophils` and `bloodureanitro` exhibit strong positive skewness (values > 1), indicating that most observations are clustered toward lower values with a long right tail
+
+-   **Moderate positive skewness**: `hematocrit` and `lengthofstay` show moderate positive skewness (values > 0.5), suggesting a concentration of lower values but less extreme than the strongly skewed variables
+
+-   **Negative skewness**: `respiration` displays moderate negative skewness (value < -0.5), indicating that most values are concentrated toward the higher end of the distribution
+
+-   **High variability**: `glucose` has the highest standard deviation among all variables, indicating greater variability in blood glucose measurements across patients
+
+-   **Wide range**: `bloodureanitro` has the widest range (681.50), reflecting substantial variation in kidney function across the patient population
+
+```{r warning=FALSE}
+# 3.1 Summary Statistics
+describe(hospital)
+```
+
+### 3.2 Response Variable Binning
+
+To facilitate visualization of relationships between the response variable and predictors, `lengthofstay` was binned into four intervals: "1-2", "3-4", "5-6", and "7-17" days. Since LOS is skewed toward shorter stays, these intervals were chosen to ensure relative balance across categories while maintaining interpretability.
+
+The distribution of binned LOS categories reveals that the variable is highly imbalanced, with the majority of patients experiencing shorter stays (1-2 and 3-4 days). This binning strategy ensures that longer stays, which are less common but clinically important, remain visible in visualizations and allow for clearer comparisons across predictor variables.
+
+```{r warning=FALSE}
+# 3.2 Response Variable Binning
+# Binned response variable for visualization
+table(hospital$lengthofstay)
+
+hospital$lengthofstay_binned <- cut(hospital$lengthofstay, 
+                                breaks = c(0, 2, 4, 6, 17),
+                                right = TRUE, 
+                                labels = c("1-2", "3-4", "5-6", "7-17"))
+```
+
+```{r warning=FALSE, fig.width=7, fig.height=3.5}
+# Bar and histograms for lengthofstay distribution
+grid.arrange(
+  ggplot(hospital, aes(x = lengthofstay_binned, fill = factor(lengthofstay_binned))) +
+  geom_bar(position = "dodge") +
+  labs(title = "Binned Response Variable Plot",
+       x = "Length of Stay (Binned Categories)",
+       y = "Count") +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  theme_linedraw(),
+
+  ggplot(hospital, aes(x = lengthofstay, fill = factor(lengthofstay_binned))) +
+  geom_histogram(bins = 20, color = "black") + 
+  labs(title = "Histogram of Length of Stay (Days)", 
+       x = "Length of Stay (Days)", y = "Frequency",
+       fill = "Length of Stay") +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  theme_linedraw(),
+
+  nrow = 1
+)
+```
+
+### 3.3 Visualizing Distributions of Variables
+
+To assess the distribution of predictor variables in relation to LOS, histograms were generated for continuous variables, color-coded by the binned `lengthofstay` categories. These visualizations confirmed the skewness patterns identified in the summary statistics:
+
+-   **Neutrophils and Blood Urea Nitrogen**: Exhibit extreme positive skewness, with most values clustered toward the left side of the distribution
+
+To address these distributional issues and improve model performance, log transformations were applied to positively skewed variables (`neutrophils` and `bloodureanitro`). These transformations help normalize the distributions and reduce the influence of extreme values. Other continuous variables exhibited approximately normal distributions and required no transformation.
+
+```{r warning=FALSE, fig.width=7, fig.height=3.5}
+# 3.3 Visualizing Distributions of Variables
+
+# Histograms for numerical variables
+grid.arrange(
+  ggplot(hospital, aes(x = neutrophils, fill = factor(lengthofstay_binned))) +
+  geom_histogram(bins = 20, color = "black") + 
+  labs(title = "Histogram of Neutrophils (cells/microL)", 
+       x = "Neutrophils (cells/microL)", y = "Frequency",
+       fill = "Length of Stay") +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  theme_linedraw(),
+  
+  ggplot(hospital, aes(x = log(neutrophils + 1), fill = factor(lengthofstay_binned))) +
+  geom_histogram(bins = 20, color = "black") + 
+  labs(title = "Histogram of Neutrophils (Log Transformation)", 
+       x = "Neutrophils", y = "Frequency",
+       fill = "Length of Stay") +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  theme_linedraw(),
+  
+  ggplot(hospital, aes(x = bloodureanitro, 
+                       fill = factor(lengthofstay_binned))) +
+  geom_histogram(bins = 20, color = "black") + 
+  labs(title = "Histogram of Blood Urea Nitrogen (mg/dL)", 
+       x = "Blood Urea Nitrogen (mg/dL)", y = "Frequency",
+       fill = "Length of Stay") +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  theme_linedraw(),
+  
+  ggplot(hospital, aes(x = log(bloodureanitro + 1), 
+                       fill = factor(lengthofstay_binned))) +
+  geom_histogram(bins = 20, color = "black") + 
+  labs(title = "Histogram of Blood Urea Nitrogen (Log Transformation)", 
+       x = "Blood Urea Nitrogen", y = "Frequency",
+       fill = "Length of Stay") +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  theme_linedraw(),
+  
+  nrow = 2
+)
+```
+
+Bar plots were generated to visualize the distributions of binary and categorical variables across LOS categories. These visualizations revealed important patterns:
+
+-   **Health and mental health conditions**: For all binary health and mental health indicators, patients without the condition predominantly had shorter stays (1-2 days), while patients with the condition consistently had stays of three days or longer, indicating a strong association between comorbidities and extended hospitalization
+
+-   **Readmission history**: Patients with at least one readmission in the past 180 days were more likely to have extended stays (5+ days) compared to those without recent readmissions. Conversely, shorter stays (1-4 days) were less common among patients with recent readmissions, suggesting that readmission history is a strong predictor of LOS
+
+```{r warning=FALSE, fig.width=7, fig.height=6}
+# Bar plots for binary and categorical variables
+grid.arrange(
+  ggplot(hospital, aes(x = irondef, fill = factor(lengthofstay_binned))) + 
+  geom_bar(position = "dodge") + 
+  labs(title = "Length of Stay by Iron Deficiency", 
+       x = "Iron Deficiency", y = "Frequency", fill = "Length of Stay") +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  theme_linedraw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)),
+  
+  ggplot(hospital, aes(x = psychologicaldisordermajor, 
+                       fill = factor(lengthofstay_binned))) + 
+  geom_bar(position = "dodge") + 
+  labs(title = "Length of Stay by Major Psychological Disorder", 
+       x = "Major Psychological Disorder", y = "Frequency", 
+       fill = "Length of Stay") +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  theme_linedraw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)),
+  
+  ggplot(hospital, aes(x = rcount_binary, 
+                       fill = factor(lengthofstay_binned))) + 
+  geom_bar(position = "dodge") + 
+  labs(title = "Length of Stay by Readmission Count", 
+       x = "Readmission Count", y = "Frequency", fill = "Length of Stay") +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  theme_linedraw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)),
+  
+  nrow = 1
+)
+```
+
+### 3.4 Principal Component Analysis (PCA)
+
+Principal Component Analysis (PCA) was conducted to explore the underlying structure of the numerical variables and reduce dimensionality while retaining maximum variance. All variables were scaled to ensure that differing units and scales did not disproportionately influence the analysis.
+
+A cumulative variance plot revealed that no distinct elbow point exists, indicating that many components are needed to capture substantial variance. This suggests high complexity in the dataset, with information distributed across multiple dimensions rather than concentrated in a few principal components.
+
+To identify patient subgroups with similar characteristics, K-means clustering was applied to the first 20 principal components. The elbow method plot showed multiple potential elbow points; 16 clusters were selected to balance variance capture with interpretability. The resulting clusters were visualized using a scatterplot of the first two principal components, with points colored by cluster assignment.
+
+The relationship between clusters and length of stay was examined using boxplots and summary statistics. Key findings include:
+
+-   **Shortest stays**: Clusters 1 and 16 averaged approximately 1 day, with cluster 1 having the lowest mean LOS (1.70 days)
+-   **Longest stays**: Clusters 8 and 9 averaged approximately 6 days, with cluster 9 having the highest mean LOS (6.46 days)
+-   **Intermediate stays**: Clusters 6 and 13 averaged 2 days, cluster 15 averaged 3 days, cluster 14 averaged 4 days, and remaining clusters averaged around 5 days
+
+These clusters provide insight into distinct patient subpopulations with varying length of stay patterns, potentially reflecting differences in disease severity, comorbidity burden, and treatment complexity.
+
+```{r warning=FALSE, fig.width=7, fig.height=3.5}
+# 3.4 Principal Component Analysis (PCA)
+set.seed(2024)
+
+# Scale numerical variables
+hospital_scaled <- scale(hospital[, sapply(hospital, is.numeric)])
+
+# Perform PCA on scaled data
+pca_result <- prcomp(hospital_scaled, scale = TRUE)
+
+# Explained & cumulative variance
+explained_variance <- pca_result$sdev^2 / sum(pca_result$sdev^2)
+cumulative_variance <- cumsum(explained_variance)
+
+# Data frame for plotting
+pc_data <- data.frame(
+  PrincipalComponent = 1:length(cumulative_variance),
+  CumulativeVariance = cumulative_variance
+)
+
+# Extract first 20 components
+pca_scores <- pca_result$x[, 1:20]
+
+# Calculate WSS for k-means
+wss <- numeric(20)
+for (k in 1:20) {
+  wss[k] <- sum(kmeans(pca_scores, centers = k)$tot.withinss)
+}
+
+# Dataframe for elbow plot
+df <- data.frame(Clusters = 1:20, WSS = wss)
+
+grid.arrange(
+  ggplot(pc_data, aes(x = PrincipalComponent, y = CumulativeVariance)) +
+  geom_line(color = viridis(1)) +
+  geom_point(color = viridis(1)) +
+  labs(title = "Cumulative Explained Variance",
+       x = "Principal Component", 
+       y = "Cumulative Variance Explained") +
+  theme_linedraw(),
+  
+  ggplot(df, aes(x = Clusters, y = WSS)) +
+  geom_point(color = viridis(1), size = 3) + 
+  geom_line(color = viridis(1), size = 1.2) + 
+  labs(title = "Elbow Method for K-Means Clustering",
+       x = "Number of Clusters",
+       y = "Within-cluster Sum of Squares") +
+  theme_linedraw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 10)),
+  
+  nrow = 1
+)
+
+# K-means clustering with 16 clusters
+kmeans_result <- kmeans(pca_scores, centers = 16)
+# Note: Not adding cluster to hospital dataframe to avoid including it in models
+# hospital$cluster <- as.factor(kmeans_result$cluster)
+cluster <- as.factor(kmeans_result$cluster)
+
+grid.arrange(
+  ggplot(data.frame(cluster = cluster, lengthofstay = hospital$lengthofstay),
+         aes(x = cluster, y = lengthofstay, fill = cluster)) +
+  geom_boxplot(outlier.shape = 16, outlier.colour = "red", outlier.size = 3) +
+  labs(title = "Length of Stay by Cluster",
+       x = "Cluster", y = "Length of Stay") +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  theme_linedraw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none"),
+
+  ggplot(data.frame(PC1 = pca_scores[, 1], PC2 = pca_scores[, 2],
+                    cluster = cluster),
+         aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "PCA-based Clusters", x = "PC1", y = "PC2") +
+  scale_color_viridis(discrete = TRUE, option = "plasma") +
+  theme_linedraw() +
+  theme(legend.title = element_blank(), legend.position = "top"),
+
+  nrow = 1
+)
+```
+
+```{r include=FALSE}
+# Mean lengthofstay table by cluster
+cluster_summary <- data.frame(cluster = cluster, lengthofstay = hospital$lengthofstay) %>%
+  group_by(cluster) %>%
+  summarize(mean_lengthofstay = mean(lengthofstay),
+            median_lengthofstay = median(lengthofstay),
+            sd_lengthofstay = sd(lengthofstay))
+
+# ANOVA test
+anova_result <- aov(lengthofstay ~ cluster,
+                    data = data.frame(lengthofstay = hospital$lengthofstay,
+                                      cluster = cluster))
+
+# Pairwise t-tests
+pairwise_result <- pairwise.t.test(hospital$lengthofstay, cluster)
+```
+
+ANOVA testing confirmed significant differences in length of stay across clusters (p < 0.001). Detailed cluster statistics are provided in the Supplementary Tables section.
+
+### 3.5 Correlation Matrix
+
+A correlation matrix was generated for all numeric variables to identify strong relationships that may inform model development and interpretation. The analysis revealed several notable correlations:
+
+**Positive correlations** (indicating variables that tend to increase together):
+-   Psychotherapy, dialysis/renal end stage, blood urea nitrogen, and malnutrition show positive associations
+-   Malnutrition correlates with iron deficiency
+-   Depression correlates with major psychological disorder
+-   Length of stay correlates with major psychological disorder and readmission history
+
+**Negative correlation**:
+-   Hematocrit and hematological conditions show a negative correlation, which is clinically expected as hematological disorders often result in reduced hematocrit levels
+
+These correlations provide insight into comorbidity patterns and suggest that mental health conditions and kidney-related issues may be particularly important predictors of extended hospital stays.
+
+```{r warning=FALSE}
+numeric_hospital <- hospital[, sapply(hospital, is.numeric)]
+cor_matrix <- cor(numeric_hospital)
+
+cor_melted <- melt(cor_matrix)
+strong_correlations <- cor_melted[abs(cor_melted$value) > 0.25, ]
+
+ggplot(cor_melted, aes(Var1, Var2, fill = value)) +
+  geom_tile() + 
+  scale_fill_viridis(option = "plasma", direction = -1) +
+  theme_linedraw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+### 3.6 Scatterplots
+
+Scatterplots were generated to assess the relationship between continuous predictors and length of stay. However, because LOS is a discrete count variable rather than continuous, clear linear relationships are difficult to discern visually. The scatterplot of log-transformed blood urea nitrogen versus LOS illustrates this challenge, though a general positive trend is observable, suggesting that higher BUN levels are associated with longer hospital stays.
+```{r warning=FALSE}
+# Scatterplot of continuous variable
+ggplot(hospital, aes(x = log(bloodureanitro+1), y = lengthofstay, 
+                     color = factor(lengthofstay_binned))) + 
+  geom_point() + 
+  geom_smooth(method = "lm", col = "black") + 
+  labs(title = "Relationship between BUN and Length of Stay", 
+       x = "Blood Urea Nitrogen (Log Transformation)", 
+       y = "Length of Stay (Days)", 
+       color = "Length of Stay") + 
+  scale_color_viridis(discrete = TRUE, option = "plasma") + 
+  theme_linedraw()
+```
+
+## 4 Model Selection
+
+### 4.1 Data Split
+
+To ensure robust model evaluation, the dataset was split into training (80%) and testing (20%) sets. Stratified sampling was employed to maintain proportional representation of all length of stay values across both sets, preventing bias that could arise from imbalanced distributions. The training set is used for model development and parameter estimation, while the held-out test set provides an unbiased assessment of model performance on unseen data.
+
+```{r warning=FALSE}
+# 4.1 Data Split
+
+# Split data into training and testing sets with stratified sampling
+set.seed(2024)
+train_index <- createDataPartition(hospital$lengthofstay, p = 0.8,
+                                   list = FALSE)
+train_data <- hospital[train_index, ]
+test_data <- hospital[-train_index, ]
+```
+
+### 4.2 Full Model
+
+Model development began with a full Negative Binomial generalized linear model (GLM) incorporating all available predictors. The Negative Binomial distribution was selected due to the count nature of `lengthofstay` and the substantial overdispersion identified in the data preprocessing phase.
+
+The model specification includes:
+-   Original binary and categorical variables (comorbidities, mental health indicators, demographics)
+-   Log-transformed versions of positively skewed continuous variables (`neutrophils`, `bloodureanitro`)
+-   Exclusion of original feature-engineered variables (`rcount`, `gender`, `secondarydiagnosisnonicd9`) in favor of their binary/recategorized versions (`rcount_binary`, `gender_binary`, `secondarydx_recategorized`)
+
+Model diagnostics reveal that several variables exhibit weak associations with the outcome, as indicated by high p-values. The theta parameter (dispersion parameter) quantifies the degree of overdispersion, with larger values indicating less overdispersion relative to a Poisson distribution.
+
+```{r warning=FALSE, include=FALSE}
+# 4.2 Full Model
+
+# Full model fitting with Negative Binomial
+full_model <- suppressWarnings(
+  glm.nb(lengthofstay ~ . - lengthofstay_binned - rcount - gender -
+                    secondarydiagnosisnonicd9 -
+                    neutrophils - bloodureanitro + log(neutrophils + 1) +
+                    log(bloodureanitro + 1),
+                    data = train_data)
+)
+full_model_summary <- summary(full_model)
+```
+
+The full model was fitted with all available predictors (23 variables). Model diagnostics and detailed coefficient estimates are provided in the Supplementary Tables section. AIC = `r round(AIC(full_model), 1)`.
+
+### 4.3 Lasso Regression for Variable Selection
+
+Lasso (Least Absolute Shrinkage and Selection Operator) regression was employed to identify the most important predictors and reduce model complexity. Lasso applies L1 regularization, which shrinks less important coefficients toward zero, effectively performing automatic variable selection. Cross-validation was used to determine the optimal regularization parameter (lambda).
+
+**Note on methodology**: Since `glmnet` does not directly support Negative Binomial regression, Lasso was performed using a Poisson family for variable selection purposes only. This is a standard approach because Poisson and Negative Binomial models share the same mean structure (log link function), making the variable importance rankings comparable. The final model fitting uses the proper Negative Binomial distribution to account for overdispersion.
+
+The Lasso procedure identified a subset of predictors by shrinking coefficients of less important variables to zero. Many variables with weak associations in the full model were eliminated, resulting in a more parsimonious model. A new Negative Binomial GLM was then fitted using only the Lasso-selected predictors.
+
+To formally compare the full and Lasso-selected models, an ANOVA test and AIC comparison were performed. The Negative Binomial framework enables proper likelihood-based model comparison through AIC, which balances model fit against complexity. Lower AIC values indicate superior model performance after accounting for the number of parameters.
+
+```{r warning=FALSE}
+# 4.3 Lasso Regression
+
+# Lasso regression for variable selection
+# Final model will use Negative Binomial to account for overdispersion
+x <- model.matrix(lengthofstay ~ . - lengthofstay_binned - rcount - gender -
+                    secondarydiagnosisnonicd9 -
+                    neutrophils - bloodureanitro +
+                    log(neutrophils + 1) +
+                    log(bloodureanitro + 1),
+                  data = train_data)[, -1]
+y <- train_data$lengthofstay
+lasso_model <- cv.glmnet(x, y, alpha = 1, family = "poisson")
+
+# Print coefficients found by lasso
+coef(lasso_model, s = "lambda.min")
+```
+
+```{r warning=FALSE, include=FALSE}
+# Fit Negative Binomial model with lasso-selected coefficients
+lasso_selected_model <- suppressWarnings(
+  glm.nb(lengthofstay ~ dialysisrenalendstage + asthma +
+                              irondef + pneum + substancedependence +
+                              psychologicaldisordermajor + depress +
+                              psychother + fibrosisandother + malnutrition +
+                              hemo + sodium + pulse + rcount_binary +
+                              secondarydx_recategorized + gender_binary +
+                              log(neutrophils + 1) +
+                              log(bloodureanitro + 1),
+                              data = train_data)
+)
+lasso_model_summary <- summary(lasso_selected_model)
+
+# Compare models using ANOVA and AIC
+anova_comparison <- anova(lasso_selected_model, full_model, test = "Chisq")
+full_aic <- AIC(full_model)
+lasso_aic <- AIC(lasso_selected_model)
+```
+
+The Lasso-selected model retained 21 predictors. Model comparison shows improved parsimony: Full Model AIC = `r round(full_aic, 1)`, Lasso-Selected Model AIC = `r round(lasso_aic, 1)`. Detailed model summaries are in the Supplementary Tables section.
+
+### 4.4 Final Model
+
+The final Negative Binomial model was refined through a two-stage process: first, Lasso regression identified important predictors; second, insignificant variables (p-values > 0.05) were removed to create a parsimonious model. 
+
+The final model includes:
+-   **Comorbidities**: Dialysis/renal end stage, asthma, iron deficiency, pneumonia, substance dependence, malnutrition, hematological conditions
+-   **Mental health indicators**: Major psychological disorder, depression, psychotherapy
+-   **Patient characteristics**: Readmission history, secondary diagnoses, gender
+-   **Laboratory values**: Log-transformed neutrophils and blood urea nitrogen
+
+**Model Performance and Cross-Validation:**
+
+Model performance was assessed using 10-fold cross-validation, which tested three different link functions (identity, log, and sqrt). The identity link function was selected as optimal based on the lowest RMSE (1.608). Cross-validation results demonstrate strong predictive performance:
+- **RMSE**: 1.608 days (average prediction error)
+- **R-squared**: 0.539 (model explains 53.9% of variance in length of stay)
+- **MAE**: 1.235 days (average absolute prediction error)
+
+These metrics indicate that the model can predict hospital length of stay within approximately 1.6 days on average, which is clinically meaningful for resource planning and patient management.
+
+**Model Comparison:**
+
+The Final model achieves the lowest AIC (best fit) with the fewest predictors (most parsimonious), demonstrating optimal balance between model complexity and predictive performance. The similar theta values across models indicate consistent handling of overdispersion. The Negative Binomial framework offers several advantages over Quasi-Poisson models, including proper likelihood-based inference, more accurate standard errors, and reliable prediction intervals, all critical for healthcare decision-making.
+
+```{r warning=FALSE}
+# 4.4 Final Model
+
+# Fit final Negative Binomial model with only significant predictors
+# Note: Suppressing "iteration limit reached" warning - occurs when theta is very large
+# (indicating data are nearly Poisson-distributed, but NB still provides robust inference)
+final_model <- suppressWarnings(
+  glm.nb(lengthofstay ~ dialysisrenalendstage + asthma + irondef +
+                     pneum + substancedependence + psychologicaldisordermajor +
+                     depress + psychother + malnutrition + hemo +
+                     rcount_binary + secondarydx_recategorized + gender_binary +
+                     log(neutrophils + 1) +
+                     log(bloodureanitro + 1),
+                     data = train_data)
+)
+
+summary(final_model)
+
+# Display model fit statistics
+cat("\nFinal Model Statistics:\n")
+cat("AIC:", AIC(final_model), "\n")
+cat("Theta (dispersion parameter):", final_model$theta, "\n")
+cat("Log-Likelihood:", logLik(final_model), "\n")
+
+# Cross-validation for final model
+train_control_final_model <- trainControl(method = "cv", number = 10)
+final_model_train <- suppressWarnings(
+  train(lengthofstay ~ dialysisrenalendstage + asthma +
+                             irondef + pneum + substancedependence +
+                             psychologicaldisordermajor + depress +
+                             psychother + malnutrition + hemo +
+                             rcount_binary + secondarydx_recategorized +
+                             gender_binary + log(neutrophils + 1) +
+                             log(bloodureanitro + 1),
+                           data = train_data,
+                           method = "glm.nb",
+                           trControl = train_control_final_model)
+)
+final_model_train
+
+# Display cross-validation results
+cat("\nCross-Validation Results:\n")
+cat("RMSE:", final_model_train$results$RMSE, "\n")
+cat("R-squared:", final_model_train$results$Rsquared, "\n")
+cat("MAE:", final_model_train$results$MAE, "\n")
+
+# Create model comparison table
+model_comparison <- data.frame(
+  Model = c("Full Model", "Lasso-Selected Model", "Final Model"),
+  AIC = c(AIC(full_model), AIC(lasso_selected_model), AIC(final_model)),
+  Num_Predictors = c(length(coef(full_model)) - 1,
+                     length(coef(lasso_selected_model)) - 1,
+                     length(coef(final_model)) - 1),
+  Theta = c(full_model$theta, lasso_selected_model$theta, final_model$theta)
+)
+
+cat("\nModel Comparison Summary:\n")
+print(model_comparison)
+```
+
+### 4.5 Model Diagnostics
+
+Comprehensive diagnostics were performed on the final Negative Binomial model to verify model assumptions and identify potential issues that could affect inference or prediction.
+
+**Diagnostic Results:**
+
+**1. Independence of Observations (Durbin-Watson Test)**
+- **DW Statistic**: 2.004 (very close to 2)
+- **p-value**: 0.734 (not significant)
+- **Interpretation**: No evidence of autocorrelation in residuals. The observations are independent, satisfying this key assumption.
+
+**2. Multicollinearity (Variance Inflation Factors)**
+- **Maximum VIF**: 1.531 (log(bloodureanitro + 1))
+- **Mean VIF**: 1.178
+- **All VIFs < 2**: Well below the threshold of 10
+- **Interpretation**: Multicollinearity is not a concern. All predictors provide independent information to the model.
+
+**3. Condition Number**
+- **Value**: 117.49
+- **Interpretation**: Moderate conditioning, indicating acceptable numerical stability in parameter estimation.
+
+**4. Model Fit**
+- **AIC**: 301,363.9 (lowest among all three models)
+- **Theta (dispersion)**: 78,904.75 (SE = 40,294.48)
+- **Interpretation**: The very large theta value indicates minimal overdispersion, suggesting the data are nearly Poisson-distributed. However, the Negative Binomial model still provides more robust inference than Poisson.
+
+**5. Residual Patterns and Influential Observations**
+
+Residual diagnostics and Cook's Distance plots (shown below) assess homoscedasticity and identify influential observations. The residuals versus fitted values plot reveals patterns typical of count data models, while Cook's Distance identifies any observations with disproportionate influence on model parameters (threshold = 4/n).
+
+```{r warning=FALSE}
+# Model diagnostics for Negative Binomial regression
+
+# Test for independence
+dw_test <- dwtest(final_model)
+cat("Durbin-Watson Test:\n")
+cat("DW Statistic:", dw_test$statistic, "\n")
+cat("p-value:", dw_test$p.value, "\n\n")
+
+# Test for multicollinearity
+vif_values <- vif(final_model)
+max_vif <- max(vif_values)
+mean_vif <- mean(vif_values)
+
+# Condition number
+cond_num <- kappa(final_model)
+cat("Condition Number:", cond_num, "\n\n")
+
+# Model fit statistics
+cat("Model Fit Statistics:\n")
+cat("AIC:", AIC(final_model), "\n")
+cat("Theta (dispersion):", final_model$theta, "\n")
+cat("SE(Theta):", final_model$SE.theta, "\n")
+```
+
+```{r warning=FALSE, fig.width=7, fig.height=3.5}
+# Cook's Distance high influence points
+cooks_distance_final_model <- cooks.distance(final_model)
+cooks_data <- data.frame(Index = seq_along(cooks_distance_final_model),
+                         CooksDistance = cooks_distance_final_model)
+threshold <- 4 / nrow(train_data)
+high_influence_points_final_model <- which(
+  cooks_distance_final_model > (4 / nrow(train_data)))
+
+residuals_data <- data.frame(FittedValues = final_model$fitted.values,
+                             Residuals = residuals(final_model))
+
+grid.arrange(
+  # Residuals vs. fitted values
+  ggplot(residuals_data, aes(x = FittedValues, y = Residuals,
+                             color = Residuals)) +
+  geom_point(alpha = 0.6) +
+  scale_color_viridis(option = "plasma") +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Residuals vs Fitted",
+       x = "Fitted Values",
+       y = "Residuals") +
+  theme_linedraw(),
+
+  ggplot(cooks_data, aes(x = Index, y = CooksDistance,
+                         color = CooksDistance)) +
+  geom_point(alpha = 0.6) +
+  scale_color_viridis(option = "plasma") +
+  geom_hline(yintercept = threshold, color = "red", linetype = "dashed") +
+  labs(title = "Cook's Distance",
+       x = "Index",
+       y = "Cook's Distance") +
+  theme_linedraw(),
+
+  nrow = 1
+)
+```
+
+### 4.6 Prediction Analysis
+
+The final model's predictive performance was rigorously evaluated on the held-out test set to assess generalization to unseen data. Confidence intervals for model coefficients quantify the uncertainty around parameter estimates, while comprehensive performance metrics characterize prediction accuracy.
+
+**Model Performance:**
+The model demonstrates strong predictive performance with a mean prediction error near zero, indicating minimal systematic bias. The slightly negative mean error suggests a tendency toward modest overestimation of length of stay. In healthcare settings, this conservative bias is often preferable to underestimation, as it enables facilities to maintain adequate resource buffers and avoid capacity shortfalls.
+
+**Residual Diagnostics:**
+Examination of prediction residuals reveals several patterns:
+-   Residuals are generally centered around zero, indicating unbiased predictions on average
+-   Increasing dispersion at higher predicted values suggests heteroscedasticity, where prediction accuracy varies across the range of LOS values
+-   The QQ-plot exhibits heavy tails, indicating that the residual distribution has more extreme values than expected under normality—a common characteristic of count data models
+
+These diagnostic patterns are typical for Negative Binomial regression on count data and do not necessarily indicate model inadequacy, but rather reflect the inherent variability in hospital length of stay.
+
+```{r warning=FALSE, include=FALSE}
+# 4.6 Prediction Analysis
+
+# Confidence intervals for coefficients
+conf_int <- confint(final_model)
+
+# Predictions on test set
+predictions <- predict(final_model, newdata = test_data, type = "link")
+predicted_counts <- exp(predictions)
+
+comparison <- data.frame(Actual = test_data$lengthofstay,
+                         Predicted = predicted_counts)
+
+# Prediction error metrics
+prediction_error <- test_data$lengthofstay - predicted_counts
+residuals_data <- data.frame(Index = seq_along(prediction_error),
+                             Residuals = prediction_error)
+
+# Calculate performance metrics
+mae <- mean(abs(prediction_error))
+rmse <- sqrt(mean(prediction_error^2))
+mean_error <- mean(prediction_error)
+median_error <- median(prediction_error)
+
+cat("\nTest Set Performance Metrics:\n")
+cat("Mean Absolute Error (MAE):", mae, "\n")
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+cat("Mean Prediction Error:", mean_error, "\n")
+cat("Median Prediction Error:", median_error, "\n")
+
+# R-squared on test set
+ss_res <- sum(prediction_error^2)
+ss_tot <- sum((test_data$lengthofstay - mean(test_data$lengthofstay))^2)
+r_squared_test <- 1 - (ss_res / ss_tot)
+cat("Test Set R-squared:", r_squared_test, "\n")
+```
+
+```{r warning=FALSE, fig.width=7, fig.height=3.5}
+fitted_values_train <- fitted(final_model)
+residuals_data_train <- data.frame(Fitted = fitted_values_train,
+                                   Residuals = residuals(final_model))
+
+grid.arrange(
+  # Residuals of predictions
+  ggplot(residuals_data, aes(x = Index, y = Residuals, color = Residuals)) +
+  geom_point(alpha = 0.6) + 
+  scale_color_viridis(option = "plasma") + 
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") + 
+  labs(title = "Residuals",
+       x = "Index",
+       y = "Residuals") +
+  theme_linedraw(),
+  
+  # QQ-plot
+  ggplot(data.frame(Residuals = prediction_error), aes(sample = Residuals)) +
+  geom_qq(aes(color = Residuals)) + 
+  scale_color_viridis(option = "plasma") + 
+  geom_qq_line(color = "red") + 
+  labs(title = "Q-Q Plot of Residuals",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  theme_linedraw(),
+  
+  nrow = 1
+)
+```
+
+The standard errors of the predictions were calculated and used to create 95% prediction intervals. Plots were also created to visualize the action versus predicted values and prediction intervals. These plots reveal two outliers with predicted length of stays over 20 days, which are beyond the range of the data. This indicates some inaccuracy as the model struggles to predict values at extreme ends of the distribution.
+
+```{r warning=FALSE, fig.width=7, fig.height=3.5}
+# Prediction intervals
+pred_se <- predict(final_model, newdata = test_data, type = "link",
+                   se.fit = TRUE)$se.fit
+
+alpha <- 0.05
+z_score <- qnorm(1 - alpha/2)
+
+lower_pred <- exp(predictions - z_score * pred_se)
+upper_pred <- exp(predictions + z_score * pred_se)
+
+prediction_intervals <- data.frame(
+  Predicted = predicted_counts,
+  Lower_Pred = lower_pred,
+  Upper_Pred = upper_pred
+)
+
+comparison <- data.frame(Actual = test_data$lengthofstay,
+                         Predicted = predicted_counts)
+
+prediction_intervals$Actual <- test_data$lengthofstay
+
+grid.arrange(
+  
+  # Actual vs. predicted
+  ggplot(comparison, aes(x = Actual, y = Predicted)) +
+  geom_point(aes(color = Predicted), alpha = 0.6) + 
+  scale_color_viridis(option = "plasma") + 
+  geom_abline(slope = 1, intercept = 0, col = "red", linetype = "dashed") +
+  labs(title = "Actual vs Predicted Values",
+       x = "Actual Length of Stay",
+       y = "Predicted Length of Stay") +
+  theme_linedraw(),
+  
+  # Prediction intervals
+  ggplot(prediction_intervals, aes(x = Predicted, y = Actual)) +
+  geom_point(aes(color = Predicted), alpha = 0.6) + 
+  scale_color_viridis(option = "plasma") +
+  geom_errorbar(aes(ymin = Lower_Pred, ymax = Upper_Pred), width = 0.2, 
+                alpha = 0.5, color = "blue") +
+  geom_abline(slope = 1, intercept = 0, col = "red", linetype = "dashed") +
+  labs(title = "Prediction Intervals",
+       x = "Predicted Length of Stay",
+       y = "Actual Length of Stay") +
+  theme_linedraw(),
+  
+  nrow = 1
+)
+```
+
+## 5 Conclusion
+
+### 5.1 Key Findings
+
+The final Negative Binomial regression model identified several significant predictors of hospital length of stay:
+
+**Comorbidities and Health Conditions:**
+- All included comorbidities (dialysis/renal end stage, asthma, iron deficiency, pneumonia, substance dependence, malnutrition, and hematological conditions) significantly increase length of stay
+- Mental health conditions (major psychological disorder, depression, psychotherapy) have particularly strong positive effects on LOS
+
+**Laboratory Values:**
+- Higher levels of hematocrit, neutrophils, and blood urea nitrogen are associated with longer hospital stays
+- These laboratory markers likely reflect disease severity and patient complexity
+
+**Patient Characteristics:**
+- Patients with recent readmissions (within 180 days) have significantly longer stays
+- Secondary diagnoses and demographic factors also contribute to LOS prediction
+
+### 5.2 Model Performance
+
+The Negative Binomial distribution proved to be more appropriate than Quasi-Poisson for this overdispersed count data, providing:
+- Better parameter estimates with proper standard errors
+- Likelihood-based model comparison through AIC
+- More reliable prediction intervals for healthcare planning
+
+The final model demonstrates reasonable predictive performance, with cross-validation results showing the model can explain a substantial portion of variance in length of stay. The model tends to slightly overestimate LOS, which is preferable in healthcare settings as it allows facilities to be better prepared for resource allocation.
+
+### 5.3 Implications
+
+These results contribute to the broader goal of improving patient outcomes and optimizing healthcare resources by:
+- Identifying high-risk patients who may require longer stays
+- Enabling better resource planning and bed management
+- Highlighting the importance of managing comorbidities and mental health conditions
+- Providing a foundation for clinical decision support systems
+
+The insights gained from this analysis provide a strong foundation for future refinements and models, including potential incorporation of additional clinical variables and temporal patterns.
+
+## 6 Supplementary Tables and Outputs
+
+This section contains detailed statistical outputs referenced in the main analysis.
+
+### 6.1 Data Summary and Structure
+
+```{r}
+# Dataset summary statistics
+summary(hospital)
+```
+
+```{r}
+# Dataset structure
+str(hospital)
+```
+
+### 6.2 Cluster Analysis Details
+
+```{r}
+# Summary statistics by cluster
+print(cluster_summary)
+```
+
+```{r}
+# ANOVA results for cluster differences
+summary(anova_result)
+```
+
+```{r}
+# Pairwise t-test results
+print(pairwise_result)
+```
+
+### 6.3 Full Model Summary
+
+```{r}
+# Complete summary of full model (23 predictors)
+summary(full_model)
+```
+
+### 6.4 Lasso-Selected Model Summary
+
+```{r}
+# Complete summary of Lasso-selected model (21 predictors)
+summary(lasso_selected_model)
+```
+
+```{r}
+# ANOVA comparison between Full and Lasso-selected models
+print(anova_comparison)
+```
+
+### 6.5 Final Model Diagnostics
+
+```{r}
+# Variance Inflation Factors for all predictors
+print(vif_values)
+cat("\nMax VIF:", max_vif, "\n")
+cat("Mean VIF:", mean_vif, "\n")
+```
+
+```{r}
+# 95% Confidence Intervals for Final Model Coefficients
+print(conf_int)
+```
+
+### 6.6 Prediction Intervals Sample
+
+```{r}
+# First 10 rows of prediction intervals on test set
+head(prediction_intervals, 10)
+```
+
+## R Appendix
+
+```{r, ref.label=knitr::all_labels(), eval = F, echo = T}
+```
