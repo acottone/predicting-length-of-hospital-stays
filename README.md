@@ -1,111 +1,122 @@
 # Predicting Hospital Length of Stay
 
-Modeling hospital length of stay using Negative Binomial regression and regularized statistical learning on large-scale clinical data.
+Statistical modeling of hospital length of stay using **Negative Binomial regression** and **regularized GLMs** on **100,000 patient records**.
 
-[![R](https://img.shields.io/badge/R-4.0%2B-blue)](https://www.r-project.org/)
-[![GLM](https://img.shields.io/badge/Model-Negative%20Binomial-orange)](https://cran.r-project.org/package=MASS)
-[![License](https://img.shields.io/badge/License-Academic-lightgrey)](LICENSE)
+![R](https://img.shields.io/badge/r-%23276DC3.svg?style=for-the-badge&logo=r&logoColor=white)\
+![RStudio](https://img.shields.io/badge/RStudio-4285F4?style=for-the-badge&logo=rstudio&logoColor=white)
 
 ---
 
 ## TL;DR
-- Modeled hospital length of stay as overdispersed count data
-- Applied Negative Binomial GLMs with Lasso regularization
-- Reduced predictors from 29 to 18 while preserving accuracy
-- Achieved ~1.6-day average prediction error on 100,000 patients
+- Modeled hospital length of stay as **overdispersed count data**
+- Applied **Negative Binomial GLMs** with **Lasso regularization**
+- Reduced predictors from **29 to 18** with minimal performance loss
+- Achieved **~1.6-day average prediction error**
+- Prioritized **interpretability and clinical usability**
 
 ---
 
 ## Project Overview
 
-This project analyzes hospital patient data to identify key factors that influence length of stay (LOS) using advanced statistical modeling techniques. LOS is modeled as a count outcome, accounting for overdispersion commonly observed in healthcare utilization data.
+Hospital length of stay (LOS) is a critical driver of **hospital capacity planning, staffing, and cost control**. However, LOS data exhibit **strong overdispersion**, violating assumptions of standard Poisson models.
 
-Using the length of stay dataset from Microsoft
-([Hospital Length of Stay Dataset](https://microsoft.github.io/r-server-hospital-length-of-stay/input_data.html))
-with 100,000 patient records, I applied generalized linear models, regularization, and cross-validation to produce a parsimonious model suitable for clinical and operational decision-making.
+This project develops a **statistically principled and interpretable model** for LOS using:
+- Likelihood-based **Negative Binomial regression**
+- **Regularization** for variable selection
+- **Cross-validation** for generalization assessment
+
+The goal is not black-box prediction, but a **parsimonious, explainable model** suitable for healthcare decision-making.
+
+---
+
+## Key Findings
+
+### Clinical Drivers of LOS
+- Comorbidities (renal disease, pneumonia, malnutrition) dominate LOS risk
+- Mental health indicators contribute meaningfully to prolonged stays
+- Laboratory abnormalities reflect disease severity and resource needs
+
+### Modeling Insights
+- Negative Binomial regression significantly outperforms Poisson alternatives
+- Regularization removes ~40% of predictors with negligible accuracy loss
+- Simpler models improve interpretability without sacrificing utility
 
 ---
 
 ## Dataset
 
 **Source:** [Microsoft Hospital Length of Stay Dataset](https://microsoft.github.io/r-server-hospital-length-of-stay/)
-- **File:** `LengthOfStay.csv`
-- **Size:** 100,000 patient records
-- **Variables:** 28 columns including demographics, comorbidities, laboratory results, and vital signs
-- **Response Variable:** `lengthofstay` (discrete count variable, days)
+- **Patients:** 100,000
+- **Predictors:** 28 clinical, demographic, and utilization variables
+- **Response:** `lengthofstay` (days, discrete count)
+- **Domain:** Inpatient hospital admissions
+
+The dataset contains **no personally identifiable information** and is designed for healthcare analytics research.
 
 ---
 
 ## Methodology
 
-### Analysis Pipeline
+This project follows a **structured statistical modeling pipeline**, emphasizing validity, interpretability, and reproducibility.
 
-1. Data cleaning and exploratory analysis
-2. Overdispersion diagnostics and model selection
-3. Negative Binomial GLM fitting
-4. Lasso regularization for variable selection
-5. 10-fold cross-validation for model comparison
-6. Performance evaluation and interpretability analysis
+### 1. Data Preparation & Exploration
+- Examined LOS distribution and variance structure
+- Confirmed substantial overdispersion
 
-### Statistical Modeling Approach
-1. Negative Binomial Regression
-  - Chosen over Poisson and Quasi-Poisson due to overdispersion
-  - Provides valid likelihood-based inference (AIC, confidence intervals)
-  - Well-suited for healthcare utilization data
-2. Lasso Regression (L1 Regularization)
-  - Automated variable selection
-  - Reduced model complexity
-  - Improved generalization
-3. Cross-Validation
-  - 10-fold cross-validation
-  - Compared link functions and model variants
-  - Selected model with lowest RMSE
+### 2. Model Selection: Count Regression
+- Evaluated Poisson, Quasi-Poisson, and Negative Binomial models
+- Selected **Negative Binomial GLM** due to:
+  - Overdispersion handling
+  - Likelihood-based inference (AIC, confidence intervals)
+  - Stability on large healthcare datasets
 
----
+### 3. Regularization & Variable Selection
+- Applied **Lasso (L1) regularization** via `glmnet`
+- Reduced model complexity while preserving accuracy
+- Improved generalization and clinical interpretability
 
-## Model Performance
-- **RMSE:** 1.608 days
-- **MAE:** 1.235 days
-- **R^2:** 0.539
-- **Final Predictors:** 18
-- **AIC:** 301,363.9
+### 4. Model Evaluation
+- 10-fold cross-validation
+- Compared link functions and model variants
+- Evaluated RMSE, MAE, and pseudo-R²
 
-The model predicts hospital LOS with ~1.6 days on average, providing actionable accuracy for operational planning.
+### Results
 
----
+| Metric | Value |
+|--------|----------|
+| **RMSE** | 1.608 days |
+| **MAE** | 1.235 days |
+| **R^2** | 0.539 |
+| **Final Model Predictors** | 18 coefficients |
+| **AIC** | 301,363.9 |
 
-## Key Results
+The model predicts LOS with **~1.6-day average error**, suitable for operational planning and risk stratification.
 
-### Significant Predictors of Length of Stay
+#### Key Predictors
 
-#### Comorbidities
+**Comorbidities**
 - Renal disease / dialysis
 - Pneumonia
 - Malnutrition
 - Hematological conditions
 - Substance dependence
 
-#### Mental Health Indicators
+**Mental Health**
 - Major psychological disorder
 - Depression
-- Psychotherapy
+- Psychotherapy utilization
 
-#### Laboratory Values
+**Laboratory & History**
 - Neutrophil count
 - Blood urea nitrogen (BUN)
 - Hematocrit
-
-#### Patient History
 - Recent readmissions
 - Multiple secondary diagnoses
 
----
+#### Model Refinement & Comparison
 
-## Model Refinement & Comparison
+This project improves upon an earlier LOS analysis by prioritizing statistical rigor and parsimony.
 
-This project is an updated and improved version of an earlier LOS analysis.
-
-### Structural Improvements
 | Aspect | Original | Updated |
 |--------|----------|---------|
 | **Model Type** | Quasi-Poisson GLM | Negative Binomial GLM |
@@ -116,7 +127,39 @@ This project is an updated and improved version of an earlier LOS analysis.
 | **RMSE** | 1.63 | 1.61 |
 | **R^2** | 0.532 | 0.539 |
 
-Similar predictive performance was achieved with 40% fewer parameters, improving interpretability and clinical usability.
+Comparable accuracy was achieved with **substantially reduced complexity**, improving interpretability.
+
+---
+
+## Reproducibility
+
+### Environment
+- R 4.0+
+- RStudio (recommended)
+- LaTeX (for PDF rendering)
+
+### Run
+1. Clone the repository
+2. Place `LengthOfStay.csv` in the root directory
+3. Open `predictingLOS_updated.Rmd`
+4. Install required packages
+5. Knit to PDF or HTML
+
+### Required R Packages
+```r
+install.packages(c(
+  "psych",        # Descriptive statistics
+  "gridExtra",    # Multi-panel plots
+  "ggplot2",      # Data visualization
+  "MASS",         # Negative Binomial regression
+  "car",          # VIF and diagnostics
+  "glmnet",       # Lasso regression
+  "caret",        # Cross-validation
+  "lmtest",       # Durbin-Watson test
+  "viridis",      # Color palettes
+  "dplyr"         # Data manipulation
+))
+```
 
 ---
 
@@ -147,58 +190,11 @@ predicting-length-of-hospital-stays/
 
 ---
 
-## Installation & Requirements
-
-### Required R Packages
-```r
-install.packages(c(
-  "psych",        # Descriptive statistics
-  "gridExtra",    # Multi-panel plots
-  "ggplot2",      # Data visualization
-  "MASS",         # Negative Binomial regression
-  "car",          # VIF and diagnostics
-  "glmnet",       # Lasso regression
-  "caret",        # Cross-validation
-  "lmtest",       # Durbin-Watson test
-  "viridis",      # Color palettes
-  "dplyr"         # Data manipulation
-))
-```
-
-### System Requirements
-- R version 4.0.0 or higher
-- RStudio (recommended)
-- LaTeX distribution (for PDF output)
-
----
-
-## Usage
-
-### Running the Analysis
-1. Clone this repository
-2. Place `LengthOfStay.csv` in the project directory
-3. Open `predictingLOS_updated.Rmd` in RStudio
-4. Install required packages (see above)
-5. Click "Knit" to generate PDF or HTML output
-
-### Output Options
-The R Markdown file supports multiple output formats:
-- **PDF** (default) - Professional report with optimized figure sizing
-- **HTML** - Interactive web-based report
-
----
-
-## Key Insights
-
-1. LOS is Highly Structured
-  - A small subset of clinical factors explains most variation
-  - Mental health and comorbidities play a major role
-2. Parsimonious Models Perform Well
-  - Removing unnecessary complexity improves stability
-  - Easier to communicate results to clinicians
-3. Practical Accuracy
-  - ~1.6-day average error is sufficient for capacity planning
-  - Slight overestimation is conservative and operationally safer
+## Practical Implications
+- Supports **bed capacity forecasting**
+- Enables **risk stratification at admission**
+- Favors **interpretability over black-box prediction**
+- Conservative bias (slight overestimation) aligns with operational safety
 
 ---
 
@@ -206,12 +202,6 @@ The R Markdown file supports multiple output formats:
 
 **Angelina Cottone**  
 B.S. Statistics (Statistical Data Science), UC Davis 2025
-
----
-
-## Acknowledgements
-- Microsoft Hospital Length of Stay Dataset  
-  ([Microsoft R Server Healthcare Demo](https://microsoft.github.io/r-server-hospital-length-of-stay/))
 
 ---
 *Last Updated: January 2026*
