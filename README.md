@@ -441,13 +441,16 @@ predicting-length-of-hospital-stays/
 ## Author
 
 **Angelina Cottone**  
+
 B.S. Statistics (Statistical Data Science), UC Davis 2025
 
 ---
 
 ## References
 
-1. 
+### Data Sources
+
+- [Microsoft Hospital Length of Stay Dataset](https://microsoft.github.io/r-server-hospital-length-of-stay/)
 
 ---
 *Last Updated: January 2026*
